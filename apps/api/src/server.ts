@@ -1,0 +1,15 @@
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import { env } from './config/env.js';
+import { authRouter } from './modules/auth/routes.js';
+import { softwareRouter } from './modules/software/routes.js';
+import { inventoryRouter } from './modules/inventory/routes.js';
+import { documentsRouter } from './modules/documents/routes.js';
+import { dashboardRouter } from './modules/dashboard/routes.js';
+import { powershellRouter } from './modules/powershell/routes.js';
+const app = express();
+app.use(helmet()); app.use(cors()); app.use(express.json({ limit: '10mb' }));
+app.get('/health', (_req,res)=>res.json({ ok: true }));
+app.use('/api/auth', authRouter); app.use('/api/software', softwareRouter); app.use('/api/inventory', inventoryRouter); app.use('/api/documents', documentsRouter); app.use('/api/dashboard', dashboardRouter); app.use('/api/powershell', powershellRouter);
+app.listen(env.PORT, () => console.log(`WinRepo API listening on ${env.PORT}`));
