@@ -1,48 +1,60 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
-import { UserRole } from '@winrepo/shared';
+import { env } from '../config/env';
 import { redisClient } from '../config/redis';
-import logger from '../config/logger';
+import { UserRole } from '@winrepo/shared';
 
-export interface AuthRequest extends Request {
-  user?: {
-    id: string;
-    email: string;
-    role: UserRole;
-  };
+declare global {
+  namespace Express {
+    interface Request {
+      user?: {
+        id: string;
+        role: UserRole;
+        jti: string;
+      };
+    }
+  }
 }
 
-export const authenticate = async (req: AuthRequest, res: Response, next: NextFunction) => {
+export const verifyAccessToken = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader?.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Missing or invalid token' } });
+      return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'No token provided' } });
     }
 
     const token = authHeader.split(' ')[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as any;
+    const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET) as { sub: string; role: UserRole; jti: string };
 
-    req.user = {
-      id: decoded.id,
-      email: decoded.email,
-      role: decoded.role,
-    };
-
-    next();
-  } catch (error: any) {
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({ success: false, error: { code: 'TOKEN_EXPIRED', message: 'Token has expired' } });
+    const isBlacklisted = await redisClient.exists(`blacklist:${decoded.jti}`);
+    if (isBlacklisted) {
+      return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Token revoked' } });
     }
-    return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Invalid token' } });
+
+    req.user = { id: decoded.sub, role: decoded.role, jti: decoded.jti };
+    next();
+  } catch (error) {
+    return res.status(401).json({ success: false, error: { code: 'UNAUTHORIZED', message: 'Invalid or expired token' } });
   }
 };
 
-export const requireRole = (roles: UserRole[]) => {
-  return (req: AuthRequest, res: Response, next: NextFunction) => {
-    if (!req.user || !roles.includes(req.user.role)) {
-      logger.warn('Forbidden access attempt', { userId: req.user?.id, requiredRoles: roles, path: req.path });
-      return res.status(403).json({ success: false, error: { code: 'FORBIDDEN', message: 'Insufficient permissions' } });
+export const optionalAuth = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      return next();
+    }
+
+    const token = authHeader.split(' ')[1];
+    const decoded = jwt.verify(token, env.JWT_ACCESS_SECRET) as { sub: string; role: UserRole; jti: string };
+    
+    const isBlacklisted = await redisClient.exists(`blacklist:${decoded.jti}`);
+    if (!isBlacklisted) {
+      req.user = { id: decoded.sub, role: decoded.role, jti: decoded.jti };
     }
     next();
-  };
+  } catch (error) {
+    // Optional auth ignores errors
+    next();
+  }
 };

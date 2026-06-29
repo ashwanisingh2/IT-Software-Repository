@@ -2,5 +2,8 @@
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  testMatch: ['**/tests/**/*.test.ts'],
+  testMatch: ['**/*.test.ts'],
+  moduleNameMapper: {
+    '^@winrepo/shared$': '<rootDir>/../../packages/shared/src/index.ts',
+  },
 };

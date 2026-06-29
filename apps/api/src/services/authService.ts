@@ -1,94 +1,128 @@
-import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
-import { UserRepository } from '../repositories/userRepository';
+import { env } from '../config/env';
 import { redisClient } from '../config/redis';
-import { AuthResponse, UserRole } from '@winrepo/shared';
-import logger from '../config/logger';
-
-const userRepository = new UserRepository();
-const SALT_ROUNDS = 12;
-const JWT_EXPIRES_IN = '15m';
-const REFRESH_EXPIRES_IN = 7 * 24 * 60 * 60; // 7 days in seconds
+import { userRepository } from '../repositories/userRepository';
+import { auditRepository } from '../repositories/auditRepository';
+import { User, UserRole } from '@winrepo/shared';
 
 export class AuthService {
-  async login(email: string, password: string): Promise<AuthResponse> {
+  async login(email: string, password: string, ip: string, userAgent: string) {
     const user = await userRepository.findByEmail(email);
-    
     if (!user) {
-      throw new Error('Invalid credentials');
+      throw { status: 401, code: 'UNAUTHORIZED', message: 'Invalid credentials' };
     }
 
     const isValid = await bcrypt.compare(password, user.password_hash);
     if (!isValid) {
-      throw new Error('Invalid credentials');
+      throw { status: 401, code: 'UNAUTHORIZED', message: 'Invalid credentials' };
     }
+
+    const jti = uuidv4();
+    const refreshJti = uuidv4();
 
     const accessToken = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET as string,
-      { expiresIn: JWT_EXPIRES_IN }
+      { sub: user.id, role: user.role, jti },
+      env.JWT_ACCESS_SECRET,
+      { expiresIn: env.JWT_ACCESS_EXPIRY as any }
     );
 
-    const refreshToken = uuidv4();
-    await redisClient.setEx(`refresh_token:${refreshToken}`, REFRESH_EXPIRES_IN, user.id);
-
-    return {
-      user: {
-        id: user.id,
-        email: user.email,
-        role: user.role,
-        created_at: user.created_at,
-        updated_at: user.updated_at
-      },
-      accessToken,
-      refreshToken
-    };
-  }
-
-  async logout(refreshToken: string): Promise<void> {
-    await redisClient.del(`refresh_token:${refreshToken}`);
-  }
-
-  async refresh(refreshToken: string): Promise<AuthResponse> {
-    const userId = await redisClient.get(`refresh_token:${refreshToken}`);
-    if (!userId) {
-      throw new Error('Invalid or expired refresh token');
-    }
-
-    const user = await userRepository.findById(userId);
-    if (!user) {
-      throw new Error('User not found');
-    }
-
-    // Revoke old refresh token and generate a new one (Rotation)
-    await redisClient.del(`refresh_token:${refreshToken}`);
-
-    const newAccessToken = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
-      process.env.JWT_SECRET as string,
-      { expiresIn: JWT_EXPIRES_IN }
+    const refreshToken = jwt.sign(
+      { sub: user.id, jti: refreshJti },
+      env.JWT_REFRESH_SECRET,
+      { expiresIn: env.JWT_REFRESH_EXPIRY as any }
     );
 
-    const newRefreshToken = uuidv4();
-    await redisClient.setEx(`refresh_token:${newRefreshToken}`, REFRESH_EXPIRES_IN, user.id);
+    // Store refresh token in Redis (7 days = 604800 seconds)
+    await redisClient.setex(`refresh:${refreshJti}`, 604800, user.id);
 
-    return {
-      user,
-      accessToken: newAccessToken,
-      refreshToken: newRefreshToken
-    };
+    await auditRepository.log({
+      userId: user.id,
+      userEmail: user.email,
+      action: 'auth.login',
+      resourceType: 'auth',
+      resourceId: null,
+      oldValue: null,
+      newValue: null,
+      ipAddress: ip,
+      userAgent: userAgent
+    });
+
+    const { password_hash, ...safeUser } = user;
+    return { accessToken, refreshToken, user: safeUser };
   }
 
-  async setupInitialAdmin(): Promise<void> {
-    const adminEmail = process.env.INITIAL_ADMIN_EMAIL || 'admin@winrepo.local';
-    const adminPassword = process.env.INITIAL_ADMIN_PASSWORD || 'changeme123';
-    
-    const existingUser = await userRepository.findByEmail(adminEmail);
-    if (!existingUser) {
-      const hash = await bcrypt.hash(adminPassword, SALT_ROUNDS);
-      await userRepository.create(adminEmail, hash, UserRole.SUPER_ADMIN);
-      logger.info(`Initial super_admin created: ${adminEmail}`);
+  async refresh(refreshToken: string) {
+    try {
+      const decoded = jwt.verify(refreshToken, env.JWT_REFRESH_SECRET) as { sub: string; jti: string };
+      
+      const userId = await redisClient.get(`refresh:${decoded.jti}`);
+      if (!userId || userId !== decoded.sub) {
+        throw { status: 401, code: 'UNAUTHORIZED', message: 'Invalid or revoked refresh token' };
+      }
+
+      await redisClient.del(`refresh:${decoded.jti}`);
+
+      const user = await userRepository.findById(userId);
+      if (!user) throw { status: 401, code: 'UNAUTHORIZED', message: 'User not found' };
+
+      const newJti = uuidv4();
+      const newRefreshJti = uuidv4();
+
+      const newAccessToken = jwt.sign(
+        { sub: user.id, role: user.role, jti: newJti },
+        env.JWT_ACCESS_SECRET,
+        { expiresIn: env.JWT_ACCESS_EXPIRY as any }
+      );
+
+      const newRefreshToken = jwt.sign(
+        { sub: user.id, jti: newRefreshJti },
+        env.JWT_REFRESH_SECRET,
+        { expiresIn: env.JWT_REFRESH_EXPIRY as any }
+      );
+
+      await redisClient.setex(`refresh:${newRefreshJti}`, 604800, user.id);
+
+      return { accessToken: newAccessToken, refreshToken: newRefreshToken };
+    } catch (err: any) {
+      if (err.status) throw err;
+      throw { status: 401, code: 'UNAUTHORIZED', message: 'Invalid refresh token' };
+    }
+  }
+
+  async logout(accessToken: string, refreshToken?: string, ip?: string, userAgent?: string) {
+    try {
+      const decodedAccess = jwt.decode(accessToken) as { jti: string; exp: number; sub: string; email: string };
+      if (decodedAccess && decodedAccess.jti) {
+        const expiresIn = Math.max(0, decodedAccess.exp - Math.floor(Date.now() / 1000));
+        if (expiresIn > 0) {
+          await redisClient.setex(`blacklist:${decodedAccess.jti}`, expiresIn, 'revoked');
+        }
+
+        await auditRepository.log({
+          userId: decodedAccess.sub,
+          userEmail: decodedAccess.email || 'unknown',
+          action: 'auth.logout',
+          resourceType: 'auth',
+          resourceId: null,
+          oldValue: null,
+          newValue: null,
+          ipAddress: ip || 'unknown',
+          userAgent: userAgent || 'unknown'
+        });
+      }
+
+      if (refreshToken) {
+        const decodedRefresh = jwt.decode(refreshToken) as { jti: string };
+        if (decodedRefresh && decodedRefresh.jti) {
+          await redisClient.del(`refresh:${decodedRefresh.jti}`);
+        }
+      }
+    } catch (error) {
+      // Ignore errors on logout decode
     }
   }
 }
+
+export const authService = new AuthService();

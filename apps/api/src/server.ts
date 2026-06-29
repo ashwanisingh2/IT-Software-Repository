@@ -1,25 +1,49 @@
 import app from './app';
-import logger from './config/logger';
-import { connectRedis } from './config/redis';
-import { initMinio } from './config/minio';
-import { AuthService } from './services/authService';
+import { env } from './config/env';
+import { logger } from './config/logger';
+import { dbPool } from './config/database';
+import { redisClient } from './config/redis';
+import { minioClient, BUCKET_NAME } from './config/minio';
 
-const PORT = process.env.PORT || 3001;
+const PORT = env.API_PORT || 4000;
 
 const startServer = async () => {
   try {
-    await connectRedis();
-    await initMinio();
+    // Wait for DB
+    await dbPool.query('SELECT 1');
+    logger.info('Database ready');
 
-    // Setup initial super_admin if needed
-    const authService = new AuthService();
-    await authService.setupInitialAdmin();
+    // Wait for Redis
+    await redisClient.ping();
+    logger.info('Redis ready');
 
-    app.listen(PORT, () => {
-      logger.info(`API Server running on port ${PORT}`);
+    // Wait for MinIO (it's initialized in config, just verify we can list buckets)
+    await minioClient.listBuckets();
+    logger.info(`MinIO ready, using bucket: ${BUCKET_NAME}`);
+
+    const server = app.listen(PORT, () => {
+      logger.info(`🚀 WinRepo API Server running in ${env.NODE_ENV} mode on port ${PORT}`);
     });
-  } catch (error: any) {
-    logger.error('Failed to start server', { error: error.message });
+
+    const shutdown = async () => {
+      logger.info('Shutting down server gracefully...');
+      server.close(async () => {
+        await dbPool.end();
+        await redisClient.quit();
+        logger.info('Closed all connections. Exiting process.');
+        process.exit(0);
+      });
+      setTimeout(() => {
+        logger.error('Force shutdown after timeout');
+        process.exit(1);
+      }, 10000);
+    };
+
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
+
+  } catch (error) {
+    logger.error('Failed to start server:', error);
     process.exit(1);
   }
 };

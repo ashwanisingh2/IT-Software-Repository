@@ -1,4 +1,5 @@
 FROM node:20-alpine AS deps
+RUN apk add --no-cache libc6-compat
 WORKDIR /app
 COPY package.json package-lock.json* ./
 COPY apps/api/package.json apps/api/package.json
@@ -7,8 +8,8 @@ RUN npm ci
 
 FROM node:20-alpine AS builder
 WORKDIR /app
-COPY . .
 COPY --from=deps /app/node_modules ./node_modules
+COPY . .
 RUN npm run build --workspace=packages/shared
 RUN npm run build --workspace=apps/api
 
@@ -16,17 +17,21 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV production
 
-# Only copy necessary files for production
-COPY package.json package-lock.json* ./
-COPY apps/api/package.json apps/api/package.json
-COPY packages/shared/package.json packages/shared/package.json
+RUN addgroup -S nodejs && adduser -S nodejs -G nodejs
+RUN apk add --no-cache curl
 
-# Install only production dependencies
-RUN npm ci --omit=dev
-
-# Copy built artifacts
+COPY --from=deps /app/node_modules ./node_modules
 COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
 COPY --from=builder /app/apps/api/dist ./apps/api/dist
+COPY --from=builder /app/apps/api/package.json ./apps/api/package.json
+COPY --from=builder /app/package.json ./package.json
 
-EXPOSE 3001
+USER nodejs
+
+EXPOSE 4000
+ENV PORT 4000
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:4000/api/health || exit 1
+
 CMD ["npm", "start", "--workspace=apps/api"]

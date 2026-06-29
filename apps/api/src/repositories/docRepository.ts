@@ -1,29 +1,74 @@
-import { dbPool } from '../config/database';
+import { query } from '../config/database';
+import { Doc, PaginatedResponse, DocCategory } from '@winrepo/shared';
 
 export class DocRepository {
-  async findAll(): Promise<any[]> {
-    const result = await dbPool.query('SELECT id, title, category, created_at, updated_at FROM docs WHERE deleted_at IS NULL ORDER BY updated_at DESC');
-    return result.rows;
+  async findById(id: string): Promise<Doc | null> {
+    const res = await query('SELECT *, created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt", deleted_at as "deletedAt" FROM docs WHERE id = $1 AND deleted_at IS NULL', [id]);
+    return res.rows[0] || null;
   }
 
-  async findById(id: string): Promise<any | null> {
-    const result = await dbPool.query('SELECT * FROM docs WHERE id = $1 AND deleted_at IS NULL', [id]);
-    return result.rows[0] || null;
-  }
+  async list(filters: { category?: DocCategory; search?: string; tags?: string[] }, page: number, limit: number): Promise<PaginatedResponse<Doc>> {
+    let where = 'WHERE deleted_at IS NULL';
+    const params: any[] = [];
+    let paramCount = 1;
 
-  async create(title: string, content: string, category: string | null, createdBy: string | null): Promise<any> {
-    const result = await dbPool.query(
-      'INSERT INTO docs (title, content, category, created_by) VALUES ($1, $2, $3, $4) RETURNING *',
-      [title, content, category, createdBy]
+    if (filters.category) {
+      where += ` AND category = $${paramCount++}`;
+      params.push(filters.category);
+    }
+    if (filters.search) {
+      where += ` AND (title ILIKE $${paramCount} OR content ILIKE $${paramCount})`;
+      params.push(`%${filters.search}%`);
+      paramCount++;
+    }
+    if (filters.tags && filters.tags.length > 0) {
+      where += ` AND tags @> $${paramCount++}`;
+      params.push(filters.tags);
+    }
+
+    const offset = (page - 1) * limit;
+    const countRes = await query(`SELECT COUNT(*) FROM docs ${where}`, params);
+    const total = parseInt(countRes.rows[0].count, 10);
+
+    params.push(limit, offset);
+    const res = await query(
+      `SELECT *, created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt", deleted_at as "deletedAt" FROM docs ${where} ORDER BY created_at DESC LIMIT $${paramCount} OFFSET $${paramCount + 1}`,
+      params
     );
-    return result.rows[0];
+
+    return {
+      success: true,
+      data: res.rows,
+      pagination: { total, page, limit, totalPages: Math.ceil(total / limit) }
+    };
   }
 
-  async update(id: string, title: string, content: string, category: string | null): Promise<any | null> {
-    const result = await dbPool.query(
-      'UPDATE docs SET title = $1, content = $2, category = $3 WHERE id = $4 AND deleted_at IS NULL RETURNING *',
-      [title, content, category, id]
+  async create(data: { title: string; content: string; category: DocCategory; tags: string[]; createdBy: string }): Promise<Doc> {
+    const res = await query(
+      `INSERT INTO docs (title, content, category, tags, created_by) VALUES ($1, $2, $3, $4, $5) RETURNING *, created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt", deleted_at as "deletedAt"`,
+      [data.title, data.content, data.category, data.tags, data.createdBy]
     );
-    return result.rows[0] || null;
+    return res.rows[0];
+  }
+
+  async update(id: string, data: Partial<{ title: string; content: string; category: DocCategory; tags: string[] }>): Promise<Doc> {
+    const keys = Object.keys(data);
+    if (!keys.length) throw new Error('No data to update');
+    
+    const params = keys.map(k => (data as any)[k]);
+    const sets = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+    
+    params.push(id);
+    const res = await query(
+      `UPDATE docs SET ${sets} WHERE id = $${params.length} AND deleted_at IS NULL RETURNING *, created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt", deleted_at as "deletedAt"`,
+      params
+    );
+    return res.rows[0];
+  }
+
+  async softDelete(id: string): Promise<void> {
+    await query('UPDATE docs SET deleted_at = NOW() WHERE id = $1 AND deleted_at IS NULL', [id]);
   }
 }
+
+export const docRepository = new DocRepository();

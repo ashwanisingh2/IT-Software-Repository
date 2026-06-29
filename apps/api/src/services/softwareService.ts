@@ -1,99 +1,123 @@
-import { SoftwareRepository } from '../repositories/softwareRepository';
-import { MinioService } from './minioService';
-import { redisClient } from '../config/redis';
+import { softwareRepository } from '../repositories/softwareRepository';
+import { storageService } from './storageService';
+import { auditRepository } from '../repositories/auditRepository';
+import { getCache, setCache, redisClient } from '../config/redis';
 import crypto from 'crypto';
-import fs from 'fs';
-import logger from '../config/logger';
-
-const softwareRepository = new SoftwareRepository();
-const minioService = new MinioService();
-const CACHE_KEY = 'software:list';
+import { SoftwareCategory, SoftwareStatus } from '@winrepo/shared';
 
 export class SoftwareService {
-  
-  async getSoftwareList(page: number, pageSize: number, search?: string, category?: string) {
-    const cacheKey = `${CACHE_KEY}:${page}:${pageSize}:${search || ''}:${category || ''}`;
-    const cached = await redisClient.get(cacheKey);
-    
-    if (cached) {
-      return JSON.parse(cached);
-    }
+  async getList(filters: any, page: number, limit: number) {
+    const hash = crypto.createHash('md5').update(JSON.stringify({ filters, page, limit })).digest('hex');
+    const cacheKey = `software:list:${hash}`;
 
-    const data = await softwareRepository.findAll(page, pageSize, search, category);
-    await redisClient.setEx(cacheKey, 300, JSON.stringify(data)); // 5 minutes cache
-    return data;
+    const cached = await getCache<any>(cacheKey);
+    if (cached) return cached;
+
+    const result = await softwareRepository.list(filters, page, limit);
+    await setCache(cacheKey, result, 300); // 5 mins
+    return result;
   }
 
-  async getSoftware(id: string) {
-    const software = await softwareRepository.findById(id);
-    if (!software) return null;
-    const versions = await softwareRepository.getVersions(id);
-    return { ...software, versions };
+  async getById(id: string) {
+    const cacheKey = `software:${id}`;
+    const cached = await getCache<any>(cacheKey);
+    if (cached) return cached;
+
+    const result = await softwareRepository.findById(id);
+    if (!result) throw { status: 404, code: 'NOT_FOUND', message: 'Software not found' };
+
+    await setCache(cacheKey, result, 600); // 10 mins
+    return result;
   }
 
-  private async invalidateCache() {
-    const keys = await redisClient.keys(`${CACHE_KEY}:*`);
-    if (keys.length > 0) {
-      await redisClient.del(keys);
-    }
-  }
+  async create(data: { name: string; vendor: string; description?: string; category: SoftwareCategory; version: string; releaseNotes?: string }, file: Express.Multer.File, userId: string, userEmail: string, ip: string, userAgent: string) {
+    const existing = await softwareRepository.findByName(data.name);
+    if (existing) throw { status: 409, code: 'CONFLICT', message: 'Software already exists' };
 
-  async uploadSoftware(data: any, file: Express.Multer.File, userId: string) {
-    // 1. Calculate SHA256
-    const fileBuffer = fs.readFileSync(file.path);
-    const hashSum = crypto.createHash('sha256');
-    hashSum.update(fileBuffer);
-    const sha256 = hashSum.digest('hex');
+    const { url, sha256, fileSize } = await storageService.upload(file.buffer, file.originalname, file.mimetype, 'temp', data.version);
 
-    // 2. Check if software exists
-    let software = await softwareRepository.findByName(data.name);
-    
-    let softwareId = software ? software.id : null;
-    const isNew = !software;
+    // Create software entry with temp URL
+    const software = await softwareRepository.create({
+      ...data,
+      sha256,
+      fileSize,
+      storageUrl: url,
+      createdBy: userId,
+    });
 
-    // 3. Upload to MinIO
-    // Format: {name}/{version}/{original_filename}
-    const objectName = `${data.name}/${data.version}/${file.originalname}`;
-    await minioService.uploadFile(objectName, file.path, file.mimetype);
+    // Add version
+    await softwareRepository.addVersion(software.id, {
+      version: data.version,
+      sha256,
+      fileSize,
+      storageUrl: url,
+      releaseNotes: data.releaseNotes
+    });
 
-    // 4. Save to DB
-    if (isNew) {
-      software = await softwareRepository.create({
-        name: data.name,
-        vendor: data.vendor,
-        category: data.category,
-        version: data.version,
-        latest_version: data.version,
-        sha256: sha256,
-        file_size: file.size,
-        storage_url: objectName,
-        created_by: userId
-      });
-      softwareId = software.id;
-    } else {
-      // It's an update. We trigger addVersion which will trigger update_latest_version
-      await softwareRepository.addVersion(softwareId!, data.version, sha256, file.size, objectName, userId);
-    }
+    await this.invalidateListCache();
 
-    // 5. Cleanup temp file
-    fs.unlinkSync(file.path);
-
-    // 6. Invalidate cache
-    await this.invalidateCache();
+    await auditRepository.log({
+      userId, userEmail, action: 'software.create', resourceType: 'software', resourceId: software.id,
+      oldValue: null, newValue: software as any, ipAddress: ip, userAgent
+    });
 
     return software;
   }
 
-  async getDownloadUrl(softwareId: string, endpointId?: string, userId?: string, ipAddress?: string) {
-    const software = await softwareRepository.findById(softwareId);
-    if (!software) {
-      throw new Error('Software not found');
+  async update(id: string, data: Partial<{ name: string; vendor: string; description: string; category: SoftwareCategory; status: SoftwareStatus }>, userId: string, userEmail: string, ip: string, userAgent: string) {
+    const oldVal = await softwareRepository.findById(id);
+    if (!oldVal) throw { status: 404, code: 'NOT_FOUND', message: 'Software not found' };
+
+    const updated = await softwareRepository.update(id, data);
+    
+    await redisClient.del(`software:${id}`);
+    await this.invalidateListCache();
+
+    await auditRepository.log({
+      userId, userEmail, action: 'software.update', resourceType: 'software', resourceId: id,
+      oldValue: oldVal as any, newValue: updated as any, ipAddress: ip, userAgent
+    });
+
+    return updated;
+  }
+
+  async delete(id: string, userId: string, userEmail: string, ip: string, userAgent: string) {
+    await softwareRepository.softDelete(id);
+    await redisClient.del(`software:${id}`);
+    await this.invalidateListCache();
+
+    await auditRepository.log({
+      userId, userEmail, action: 'software.delete', resourceType: 'software', resourceId: id,
+      oldValue: null, newValue: null, ipAddress: ip, userAgent
+    });
+  }
+
+  async download(id: string, userId: string, userEmail: string, ip: string, userAgent: string) {
+    const software = await this.getById(id);
+    
+    // Non-blocking download count increment
+    softwareRepository.incrementDownload(id).catch(() => {});
+
+    const downloadUrl = await storageService.getDownloadUrl(software.storageUrl);
+
+    await auditRepository.log({
+      userId, userEmail, action: 'software.download', resourceType: 'software', resourceId: id,
+      oldValue: null, newValue: { version: software.latestVersion }, ipAddress: ip, userAgent
+    });
+
+    return { downloadUrl, sha256: software.sha256, filename: software.storageUrl.split('/').pop() };
+  }
+
+  async getVersions(id: string) {
+    return await softwareRepository.getVersions(id);
+  }
+
+  private async invalidateListCache() {
+    const keys = await redisClient.keys('software:list:*');
+    if (keys.length > 0) {
+      await redisClient.del(...keys);
     }
-
-    // Log download (triggers increment)
-    await softwareRepository.logDownload(softwareId, endpointId, userId, ipAddress);
-
-    // Generate 1-hour presigned URL
-    return await minioService.getPresignedUrl(software.storage_url, 3600);
   }
 }
+
+export const softwareService = new SoftwareService();

@@ -1,20 +1,24 @@
 import { Router } from 'express';
 import multer from 'multer';
-import { SoftwareController, getSoftwareListSchema, uploadSoftwareSchema } from '../controllers/softwareController';
-import { validate } from '../middleware/validate';
-import { authenticate, requireRole } from '../middleware/auth';
-import { UserRole } from '@winrepo/shared';
-import { generalLimiter } from '../middleware/rateLimit';
+import { list, getById, create, update, remove, download, getVersions } from '../controllers/softwareController';
+import { verifyAccessToken, optionalAuth } from '../middleware/auth';
+import { checkPermission } from '../middleware/rbac';
+import { validateUpload } from '../middleware/fileValidation';
+import { downloadLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
-const softwareController = new SoftwareController();
-const upload = multer({ dest: 'uploads/' });
+const upload = multer({ storage: multer.memoryStorage() });
 
-router.use(generalLimiter);
+router.get('/', optionalAuth, checkPermission('software', 'read'), list);
+router.get('/:id', optionalAuth, checkPermission('software', 'read'), getById);
+router.get('/:id/versions', optionalAuth, checkPermission('software', 'read'), getVersions);
 
-router.get('/', validate(getSoftwareListSchema), softwareController.getSoftwareList.bind(softwareController));
-router.get('/:id', softwareController.getSoftware.bind(softwareController));
-router.post('/', authenticate, requireRole([UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.DEPLOYER]), upload.single('file'), validate(uploadSoftwareSchema), softwareController.upload.bind(softwareController));
-router.get('/:id/download', softwareController.download.bind(softwareController));
+// Requires deployer/admin/super_admin
+router.post('/', verifyAccessToken, checkPermission('software', 'deploy'), upload.single('file'), validateUpload, create);
+router.patch('/:id', verifyAccessToken, checkPermission('software', 'write'), update);
+router.delete('/:id', verifyAccessToken, checkPermission('software', 'delete'), remove);
+
+// Download is authenticated or optional based on requirements, assuming optional but rate limited
+router.get('/:id/download', optionalAuth, checkPermission('software', 'read'), downloadLimiter, download);
 
 export default router;

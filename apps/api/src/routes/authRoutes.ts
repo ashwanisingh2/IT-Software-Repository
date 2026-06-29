@@ -1,15 +1,13 @@
 import { Router } from 'express';
-import { AuthController, loginSchema, refreshSchema } from '../controllers/authController';
-import { validate } from '../middleware/validate';
-import { authenticate } from '../middleware/auth';
-import { authLimiter } from '../middleware/rateLimit';
+import { login, refresh, logout, getMe } from '../controllers/authController';
+import { verifyAccessToken } from '../middleware/auth';
+import { authLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
-const authController = new AuthController();
 
-router.post('/login', authLimiter, validate(loginSchema), authController.login.bind(authController));
-router.post('/logout', authenticate, authController.logout.bind(authController));
-router.post('/refresh', authLimiter, validate(refreshSchema), authController.refresh.bind(authController));
-router.get('/me', authenticate, authController.me.bind(authController));
+router.post('/login', authLimiter, login);
+router.post('/refresh', authLimiter, refresh);
+router.post('/logout', logout);
+router.get('/me', verifyAccessToken, getMe);
 
 export default router;

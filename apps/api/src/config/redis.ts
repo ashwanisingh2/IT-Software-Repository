@@ -1,30 +1,37 @@
-import { createClient } from 'redis';
-import logger from './logger';
+import Redis from 'ioredis';
+import { env } from './env';
+import { logger } from './logger';
 
-export const redisClient = createClient({
-  url: process.env.REDIS_URL
-});
-
-redisClient.on('error', (err) => {
-  logger.error('Redis Client Error', { error: err.message });
+export const redisClient = new Redis(env.REDIS_URL, {
+  maxRetriesPerRequest: 3,
+  retryStrategy(times) {
+    const delay = Math.min(times * 50, 2000);
+    return delay;
+  },
 });
 
 redisClient.on('connect', () => {
-  logger.info('Redis Client Connected');
+  logger.info('Redis client connected');
 });
 
-export const connectRedis = async () => {
-  if (!redisClient.isOpen) {
-    await redisClient.connect();
+redisClient.on('error', (err) => {
+  logger.error('Redis client error', err);
+});
+
+export const setCache = async (key: string, value: any, ttlSeconds?: number) => {
+  if (ttlSeconds) {
+    await redisClient.setex(key, ttlSeconds, JSON.stringify(value));
+  } else {
+    await redisClient.set(key, JSON.stringify(value));
   }
 };
 
-export const checkRedisConnection = async () => {
+export const getCache = async <T>(key: string): Promise<T | null> => {
+  const data = await redisClient.get(key);
+  if (!data) return null;
   try {
-    await redisClient.ping();
-    return true;
-  } catch (error: any) {
-    logger.error('Redis connection failed', { error: error.message });
-    return false;
+    return JSON.parse(data) as T;
+  } catch {
+    return null;
   }
 };

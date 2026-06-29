@@ -1,37 +1,29 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
-import morgan from 'morgan';
-import routes from './routes';
+import { env } from './config/env';
+import { requestLogger } from './middleware/requestLogger';
+import { generalLimiter } from './middleware/rateLimiter';
 import { errorHandler } from './middleware/errorHandler';
-import { checkDbConnection } from './config/database';
-import { checkRedisConnection } from './config/redis';
-import { checkMinioConnection } from './config/minio';
+import routes from './routes';
 
 const app = express();
 
 app.use(helmet());
-app.use(cors({ origin: process.env.CORS_ORIGIN || '*' }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(morgan('combined'));
+app.use(cors({ origin: env.CORS_ORIGIN, credentials: true }));
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
-// Health check endpoint
-app.get('/api/health', async (req, res) => {
-  const dbStatus = await checkDbConnection();
-  const redisStatus = await checkRedisConnection();
-  const minioStatus = await checkMinioConnection();
+// Global Rate Limiting
+app.use(generalLimiter);
 
-  const isHealthy = dbStatus && redisStatus && minioStatus;
+// Logging
+app.use(requestLogger);
 
-  if (isHealthy) {
-    res.status(200).json({ status: 'ok', services: { db: 'ok', redis: 'ok', minio: 'ok' } });
-  } else {
-    res.status(503).json({ status: 'error', services: { db: dbStatus ? 'ok' : 'error', redis: redisStatus ? 'ok' : 'error', minio: minioStatus ? 'ok' : 'error' } });
-  }
-});
-
+// Mount Routes
 app.use('/api', routes);
+
+// Error Handling
 app.use(errorHandler);
 
 export default app;
