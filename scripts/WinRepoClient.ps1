@@ -28,6 +28,18 @@ $Global:WinRepoHeaders = @{
 }
 $Global:WinRepoApi = $ApiUrl.TrimEnd('/')
 
+# Setup Transcript Logging
+$LogDir = Join-Path $env:APPDATA "WinRepo\logs"
+if (-not (Test-Path $LogDir)) {
+    New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+}
+$LogFile = Join-Path $LogDir "WinRepoClient_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+try {
+    Start-Transcript -Path $LogFile -Append -NoClobber -IncludeInvocationHeader | Out-Null
+} catch {
+    Write-Warning "Failed to start transcript logging."
+}
+
 function Get-RepoList {
     $response = Invoke-RestMethod -Uri "$Global:WinRepoApi/software" -Headers $Global:WinRepoHeaders -Method Get
     if ($response.success) {
