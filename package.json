@@ -1,0 +1,17 @@
+{
+  "name": "winrepo-platform",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Self-hosted Windows software repository and deployment platform",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --workspace apps/api\" \"npm run dev --workspace apps/web\"",
+    "build": "npm run build --workspaces"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

@@ -1,0 +1,8 @@
+node_modules/
+.next/
+dist/
+build/
+.env
+*.exe
+*.log
+upload_test.mjs
