@@ -35,7 +35,7 @@ export class EndpointRepository {
     return this.formatRow(res.rows[0]);
   }
 
-  async update(machineId: string, data: Partial<{ hostname: string, ipAddress: string, osName: string, osVersion: string, osArch: string, status: string, agentVersion: string, apiKeyHash: string }>): Promise<Endpoint> {
+  async update(machineId: string, data: Partial<{ hostname: string, ipAddress: string, osName: string, osVersion: string, osArch: string, status: string, agentVersion: string, apiKeyHash: string, cpuModel: string, totalRamBytes: number, totalDiskBytes: number, freeDiskBytes: number, biosVersion: string, manufacturer: string, model: string }>): Promise<Endpoint> {
     const updates: string[] = [];
     const values: any[] = [];
     let idx = 1;

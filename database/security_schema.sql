@@ -1,0 +1,5 @@
+ALTER TABLE endpoints
+ADD COLUMN IF NOT EXISTS bitlocker_status TEXT,
+ADD COLUMN IF NOT EXISTS firewall_enabled BOOLEAN,
+ADD COLUMN IF NOT EXISTS av_status TEXT,
+ADD COLUMN IF NOT EXISTS usb_storage_enabled BOOLEAN;

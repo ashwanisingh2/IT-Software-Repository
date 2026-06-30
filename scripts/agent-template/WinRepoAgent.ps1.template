@@ -1,7 +1,12 @@
 <#
 .SYNOPSIS
-WinRepo Agent - Auto-generated for deployment
+WinRepo Agent - Enterprise Persistent Service
 #>
+
+param (
+    [switch]$RunDaemon,
+    [switch]$Uninstall
+)
 
 $ErrorActionPreference = "Stop"
 
@@ -9,10 +14,17 @@ $ErrorActionPreference = "Stop"
 $API_URL = "{{API_URL}}"
 $ENROLLMENT_TOKEN = "{{ENROLLMENT_TOKEN}}"
 
-$CONFIG_DIR = "$env:APPDATA\WinRepo"
+$CONFIG_DIR = "$env:PROGRAMDATA\WinRepo"
 $CRED_FILE = "$CONFIG_DIR\credentials.dat"
 $SCRIPT_PATH = "$CONFIG_DIR\WinRepoAgent.ps1"
-$TASK_NAME = "WinRepoAgent"
+$TASK_NAME = "WinRepoAgent_Service"
+
+if ($Uninstall) {
+    Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false -ErrorAction SilentlyContinue
+    if (Test-Path $CONFIG_DIR) { Remove-Item -Path $CONFIG_DIR -Recurse -Force }
+    Write-Host "Agent uninstalled successfully."
+    exit
+}
 
 function Get-MachineId {
     $uuid = (Get-CimInstance -Class Win32_ComputerSystemProduct).UUID
@@ -24,11 +36,8 @@ function Get-MachineId {
 }
 
 function Register-Agent {
-    if (Test-Path $CRED_FILE) {
-        return # Already registered
-    }
+    if (Test-Path $CRED_FILE) { return }
 
-    Write-Host "Registering with WinRepo..."
     $machineId = Get-MachineId
     $os = Get-CimInstance Win32_OperatingSystem
     $ip = (Get-NetIPAddress -AddressFamily IPv4 -InterfaceAlias "Wi-Fi","Ethernet" -ErrorAction SilentlyContinue | Select-Object -First 1).IPAddress
@@ -45,14 +54,10 @@ function Register-Agent {
 
     try {
         $response = Invoke-RestMethod -Uri "$API_URL/agent/register" -Method Post -Body $payload -ContentType "application/json"
-        
         if ($response.success -and $response.data.apiKey) {
             if (-not (Test-Path $CONFIG_DIR)) { New-Item -ItemType Directory -Path $CONFIG_DIR | Out-Null }
             $secureKey = ConvertTo-SecureString -String $response.data.apiKey -AsPlainText -Force
             $secureKey | ConvertFrom-SecureString | Out-File $CRED_FILE
-            Write-Host "Registration successful."
-        } else {
-            Write-Error "Registration failed. Server returned unexpected response."
         }
     } catch {
         Write-Error "Failed to register endpoint: $_"
@@ -60,7 +65,7 @@ function Register-Agent {
 }
 
 function Get-ApiKey {
-    if (-not (Test-Path $CRED_FILE)) { throw "Not registered. Missing credentials." }
+    if (-not (Test-Path $CRED_FILE)) { throw "Not registered." }
     $secureString = Get-Content $CRED_FILE | ConvertTo-SecureString
     $ptr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureString)
     $key = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($ptr)
@@ -76,96 +81,225 @@ function Get-Headers {
     }
 }
 
-function Report-Error {
-    param($Type, $Message, $Context)
-    try {
-        $payload = @{ errorType = $Type; message = $Message; context = $Context } | ConvertTo-Json
-        Invoke-RestMethod -Uri "$API_URL/agent/error-report" -Method Post -Headers (Get-Headers) -Body $payload -ErrorAction SilentlyContinue
-    } catch { }
-}
-
 function Submit-Inventory {
     try {
-        Write-Host "Submitting inventory..."
-        $installed = Get-ItemProperty HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* |
-                     Select-Object DisplayName, DisplayVersion, Publisher |
-                     Where-Object { $_.DisplayName -ne $null }
-        $installed64 = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* |
-                       Select-Object DisplayName, DisplayVersion, Publisher |
-                       Where-Object { $_.DisplayName -ne $null }
-                       
+        # Software Inventory (Registry + Get-Package)
+        $registry32 = Get-ItemProperty HKLM:\Software\Wow6432Node\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue | Select-Object DisplayName, DisplayVersion, Publisher | Where-Object DisplayName -ne $null
+        $registry64 = Get-ItemProperty HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\* -ErrorAction SilentlyContinue | Select-Object DisplayName, DisplayVersion, Publisher | Where-Object DisplayName -ne $null
+        $packages = Get-Package -ErrorAction SilentlyContinue | Select-Object Name, Version, ProviderName | Where-Object Name -ne $null
+        
         $allSoftware = @()
-        foreach ($app in ($installed + $installed64)) {
-            $allSoftware += @{
-                name = $app.DisplayName
-                version = if ($app.DisplayVersion) { $app.DisplayVersion } else { "Unknown" }
-                vendor = if ($app.Publisher) { $app.Publisher } else { "Unknown" }
+        $seen = @{}
+        
+        foreach ($app in ($registry32 + $registry64)) {
+            $key = "$($app.DisplayName)-$($app.DisplayVersion)"
+            if (-not $seen[$key]) {
+                $seen[$key] = $true
+                $allSoftware += @{ name = $app.DisplayName; version = if ($app.DisplayVersion) { $app.DisplayVersion } else { "Unknown" }; vendor = if ($app.Publisher) { $app.Publisher } else { "Unknown" } }
             }
         }
         
-        $payload = @{ software = $allSoftware } | ConvertTo-Json -Depth 3
-        Invoke-RestMethod -Uri "$API_URL/inventory/endpoints/$(Get-MachineId)/checkin" -Method Post -Headers (Get-Headers) -Body $payload
-        Write-Host "Inventory submitted."
-    } catch {
-        Report-Error -Type "InventoryError" -Message $_.Exception.Message
-    }
+        foreach ($pkg in $packages) {
+            $key = "$($pkg.Name)-$($pkg.Version)"
+            if (-not $seen[$key]) {
+                $seen[$key] = $true
+                $allSoftware += @{ name = $pkg.Name; version = if ($pkg.Version) { $pkg.Version } else { "Unknown" }; vendor = if ($pkg.ProviderName) { $pkg.ProviderName } else { "Unknown" } }
+            }
+        }
+        
+        # Hardware Inventory
+        $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+        $mem = Get-CimInstance Win32_PhysicalMemory | Measure-Object -Property Capacity -Sum
+        $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='C:'" | Select-Object -First 1
+        $bios = Get-CimInstance Win32_BIOS | Select-Object -First 1
+        $board = Get-CimInstance Win32_BaseBoard | Select-Object -First 1
+        
+        $hardware = @{
+            cpuModel = $cpu.Name
+            totalRamBytes = $mem.Sum
+            freeDiskBytes = $disk.FreeSpace
+            totalDiskBytes = $disk.Size
+            biosVersion = $bios.SMBIOSBIOSVersion
+            manufacturer = $board.Manufacturer
+            model = $board.Product
+        }
+        
+        $payload = @{ software = $allSoftware; hardware = $hardware } | ConvertTo-Json -Depth 3
+        Invoke-RestMethod -Uri "$API_URL/inventory/endpoints/$(Get-MachineId)/checkin" -Method Post -Headers (Get-Headers) -Body $payload -ErrorAction SilentlyContinue
+    } catch { }
 }
 
 function Check-PendingDeployments {
     try {
-        $deployments = (Invoke-RestMethod -Uri "$API_URL/agent/pending-deployments" -Method Get -Headers (Get-Headers)).data
+        $deployments = (Invoke-RestMethod -Uri "$API_URL/agent/pending-deployments" -Method Get -Headers (Get-Headers) -ErrorAction SilentlyContinue).data
+        if (-not $deployments) { return }
         
         foreach ($dep in $deployments) {
-            Write-Host "Processing deployment for $($dep.softwareName)..."
             try {
                 $downloadUrl = "$API_URL/software/$($dep.softwareId)/download"
                 $tempFile = "$env:TEMP\winrepo_install_$($dep.softwareId).exe"
-                
                 Invoke-WebRequest -Uri $downloadUrl -OutFile $tempFile
-                
                 $args = if ($dep.silentInstallArgs) { $dep.silentInstallArgs } else { "/S" }
-                
                 $proc = Start-Process -FilePath $tempFile -ArgumentList $args -Wait -PassThru -NoNewWindow
                 
-                if ($proc.ExitCode -eq 0) {
-                    $payload = @{ deploymentId = $dep.id; status = "completed" } | ConvertTo-Json
-                    Invoke-RestMethod -Uri "$API_URL/agent/deployment-result" -Method Post -Headers (Get-Headers) -Body $payload
-                } else {
-                    $payload = @{ deploymentId = $dep.id; status = "failed"; errorMessage = "Exit code $($proc.ExitCode)" } | ConvertTo-Json
-                    Invoke-RestMethod -Uri "$API_URL/agent/deployment-result" -Method Post -Headers (Get-Headers) -Body $payload
-                }
-                
-                Remove-Item $tempFile -Force
+                $status = if ($proc.ExitCode -eq 0) { "completed" } else { "failed" }
+                $payload = @{ deploymentId = $dep.id; status = $status; errorMessage = "Exit code $($proc.ExitCode)" } | ConvertTo-Json
+                Invoke-RestMethod -Uri "$API_URL/agent/deployment-result" -Method Post -Headers (Get-Headers) -Body $payload
+                Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
             } catch {
                 $payload = @{ deploymentId = $dep.id; status = "failed"; errorMessage = $_.Exception.Message } | ConvertTo-Json
                 Invoke-RestMethod -Uri "$API_URL/agent/deployment-result" -Method Post -Headers (Get-Headers) -Body $payload
             }
         }
-    } catch {
-        Report-Error -Type "DeploymentError" -Message $_.Exception.Message
-    }
+    } catch { }
 }
 
-function Install-ScheduledTask {
-    if (-not (Get-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue)) {
-        Write-Host "Installing Scheduled Task..."
-        if (-not (Test-Path $SCRIPT_PATH)) {
-            Copy-Item $PSCommandPath -Destination $SCRIPT_PATH -Force
+function Report-PatchStatus {
+    try {
+        $updateSession = New-Object -ComObject Microsoft.Update.Session
+        $updateSearcher = $updateSession.CreateUpdateSearcher()
+        $searchResult = $updateSearcher.Search("IsInstalled=0 and Type='Software'")
+        
+        $missingPatches = @()
+        foreach ($update in $searchResult.Updates) {
+            $kb = if ($update.KBArticleIDs.Count -gt 0) { "KB" + $update.KBArticleIDs[0] } else { "Unknown" }
+            $missingPatches += @{
+                kbArticle = $kb
+                title = $update.Title
+                severity = $update.MsrcSeverity
+                description = $update.Description
+            }
         }
         
-        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$SCRIPT_PATH`""
-        $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Hours 6)
-        Register-ScheduledTask -TaskName $TASK_NAME -Action $action -Trigger $trigger -User "SYSTEM" -RunLevel Highest -Force
-        Write-Host "Task installed."
-    }
+        $payload = @{ missingPatches = $missingPatches } | ConvertTo-Json -Depth 3
+        Invoke-RestMethod -Uri "$API_URL/agent/patch-report" -Method Post -Headers (Get-Headers) -Body $payload -ErrorAction SilentlyContinue
+    } catch { }
 }
 
-# MAIN EXECUTION
-try {
-    Register-Agent
-    Install-ScheduledTask
-    Submit-Inventory
-    Check-PendingDeployments
-} catch {
-    Write-Error $_
+function Check-PendingScripts {
+    try {
+        $scripts = (Invoke-RestMethod -Uri "$API_URL/agent/pending-scripts" -Method Get -Headers (Get-Headers) -ErrorAction SilentlyContinue).data
+        if (-not $scripts) { return }
+        
+        foreach ($s in $scripts) {
+            try {
+                $tempFile = "$env:TEMP\winrepo_script_$($s.execution_id).ps1"
+                Set-Content -Path $tempFile -Value $s.content
+                
+                $proc = Start-Process -FilePath "powershell.exe" -ArgumentList "-ExecutionPolicy Bypass -NoProfile -NonInteractive -File `"$tempFile`"" -Wait -PassThru -NoNewWindow -RedirectStandardOutput "$tempFile.out" -RedirectStandardError "$tempFile.err"
+                
+                $stdout = if (Test-Path "$tempFile.out") { Get-Content "$tempFile.out" -Raw } else { "" }
+                $stderr = if (Test-Path "$tempFile.err") { Get-Content "$tempFile.err" -Raw } else { "" }
+                
+                $status = if ($proc.ExitCode -eq 0) { "success" } else { "failed" }
+                $payload = @{ executionId = $s.execution_id; status = $status; exitCode = $proc.ExitCode; stdout = $stdout; stderr = $stderr } | ConvertTo-Json
+                Invoke-RestMethod -Uri "$API_URL/agent/script-result" -Method Post -Headers (Get-Headers) -Body $payload
+                
+                Remove-Item $tempFile -Force -ErrorAction SilentlyContinue
+                Remove-Item "$tempFile.out" -Force -ErrorAction SilentlyContinue
+                Remove-Item "$tempFile.err" -Force -ErrorAction SilentlyContinue
+            } catch {
+                $payload = @{ executionId = $s.execution_id; status = "failed"; exitCode = 1; stdout = ""; stderr = $_.Exception.Message } | ConvertTo-Json
+                Invoke-RestMethod -Uri "$API_URL/agent/script-result" -Method Post -Headers (Get-Headers) -Body $payload
+            }
+        }
+    } catch { }
+}
+
+function Check-Policies {
+    try {
+        $policies = (Invoke-RestMethod -Uri "$API_URL/agent/pending-policies" -Method Get -Headers (Get-Headers) -ErrorAction SilentlyContinue).data
+        if (-not $policies) { return }
+        
+        foreach ($p in $policies) {
+            try {
+                if ($p.policy_type -eq 'registry') {
+                    $payload = $p.payload | ConvertFrom-Json
+                    if (-not (Test-Path $payload.path)) { New-Item -Path $payload.path -Force | Out-Null }
+                    Set-ItemProperty -Path $payload.path -Name $payload.name -Value $payload.value -Type $payload.type -Force
+                }
+                elseif ($p.policy_type -eq 'power') {
+                    $payload = $p.payload | ConvertFrom-Json
+                    powercfg /change standby-timeout-ac $payload.standbyTimeoutAc
+                    powercfg /change monitor-timeout-ac $payload.monitorTimeoutAc
+                }
+                elseif ($p.policy_type -eq 'printer') {
+                    $payload = $p.payload | ConvertFrom-Json
+                    # Basic TCP/IP printer addition stub
+                    Add-PrinterPort -Name "IP_$($payload.ip)" -PrinterHostAddress $payload.ip -ErrorAction SilentlyContinue
+                    Add-Printer -Name $payload.name -DriverName $payload.driver -PortName "IP_$($payload.ip)" -ErrorAction SilentlyContinue
+                }
+            } catch {
+                Report-Error -Type "PolicyError" -Message "Failed to apply policy $($p.name): $_"
+            }
+        }
+    } catch { }
+}
+
+function Report-SecurityStatus {
+    try {
+        # BitLocker
+        $bl = Get-BitLockerVolume -MountPoint "C:" -ErrorAction SilentlyContinue
+        $bitlockerStatus = if ($bl) { $bl.VolumeStatus } else { "Unknown" }
+        
+        # Firewall
+        $fwProfile = Get-NetFirewallProfile -Name Domain,Private,Public -ErrorAction SilentlyContinue
+        $firewallEnabled = if ($fwProfile -match "Enabled") { $true } else { $false }
+        
+        # AntiVirus (via WMI Security Center)
+        $av = Get-CimInstance -Namespace "root\SecurityCenter2" -ClassName AntiVirusProduct -ErrorAction SilentlyContinue | Select-Object -First 1
+        $avStatus = if ($av) { $av.displayName } else { "None detected" }
+        
+        # USB Storage Status (Registry)
+        $usbReg = Get-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Services\USBSTOR" -Name "Start" -ErrorAction SilentlyContinue
+        $usbEnabled = if ($usbReg -and $usbReg.Start -eq 3) { $true } else { $false }
+        
+        $payload = @{
+            bitlockerStatus = $bitlockerStatus
+            firewallEnabled = $firewallEnabled
+            avStatus = $avStatus
+            usbStorageEnabled = $usbEnabled
+        } | ConvertTo-Json
+        
+        Invoke-RestMethod -Uri "$API_URL/agent/security-report" -Method Post -Headers (Get-Headers) -Body $payload -ErrorAction SilentlyContinue
+    } catch { }
+}
+
+function Install-Daemon {
+    if (-not (Test-Path $SCRIPT_PATH)) {
+        if (-not (Test-Path $CONFIG_DIR)) { New-Item -ItemType Directory -Path $CONFIG_DIR | Out-Null }
+        Copy-Item $PSCommandPath -Destination $SCRIPT_PATH -Force
+    }
+    
+    $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-ExecutionPolicy Bypass -WindowStyle Hidden -File `"$SCRIPT_PATH`" -RunDaemon"
+    $trigger = New-ScheduledTaskTrigger -AtStartup
+    Register-ScheduledTask -TaskName $TASK_NAME -Action $action -Trigger $trigger -User "SYSTEM" -RunLevel Highest -Force | Out-Null
+    
+    # Start it immediately
+    Start-ScheduledTask -TaskName $TASK_NAME
+}
+
+# --- ENTRY POINT ---
+if ($RunDaemon) {
+    # Infinite Poll Loop
+    while ($true) {
+        try {
+            Submit-Inventory
+            Check-PendingDeployments
+            Report-PatchStatus
+            Check-PendingScripts
+            Check-Policies
+            Report-SecurityStatus
+        } catch { }
+        Start-Sleep -Seconds 300 # 5 Minute Heartbeat
+    }
+} else {
+    # Registration & Initial Setup
+    try {
+        Register-Agent
+        Install-Daemon
+        Write-Host "Agent successfully installed as a background persistent service."
+    } catch {
+        Write-Error $_
+    }
 }

@@ -36,8 +36,13 @@ const startServer = async () => {
         if (res.rowCount && res.rowCount > 0) {
           logger.info(`Marked ${res.rowCount} endpoints as stale.`);
         }
+        
+        // Phase 12: Run automation and alert rules
+        const { automationService } = require('./services/automationService');
+        await automationService.checkAlertThresholds();
+        
       } catch (err) {
-        logger.error('Error running stale endpoint detection:', err);
+        logger.error('Error running background jobs:', err);
       }
     }, 60 * 60 * 1000);
 

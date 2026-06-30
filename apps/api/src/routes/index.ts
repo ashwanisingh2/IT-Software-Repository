@@ -5,6 +5,8 @@ import inventoryRoutes from './inventoryRoutes';
 import adminRoutes from './adminRoutes';
 import docRoutes from './docRoutes';
 import agentRoutes from './agent';
+import remoteRoutes from './remote';
+import scriptRoutes from './scriptRoutes';
 
 const router = Router();
 
@@ -16,5 +18,7 @@ router.use('/inventory', inventoryRoutes);
 router.use('/admin', adminRoutes);
 router.use('/docs', docRoutes);
 router.use('/agent', agentRoutes);
+router.use('/remote', remoteRoutes);
+router.use('/scripts', scriptRoutes);
 
 export default router;

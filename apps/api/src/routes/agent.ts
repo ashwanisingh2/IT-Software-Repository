@@ -20,5 +20,11 @@ router.post('/uninstall-script', verifyAccessToken, checkPermission('inventory',
 router.get('/pending-deployments', requireMachineAuth, agentController.getPendingDeployments);
 router.post('/deployment-result', requireMachineAuth, agentController.submitDeploymentResult);
 router.post('/error-report', requireMachineAuth, agentController.reportError);
+router.post('/patch-report', requireMachineAuth, agentController.reportPatchStatus);
+router.get('/pending-scripts', requireMachineAuth, agentController.getPendingScripts);
+router.post('/script-result', requireMachineAuth, agentController.submitScriptResult);
+router.get('/pending-policies', requireMachineAuth, agentController.getPendingPolicies);
+router.post('/security-report', requireMachineAuth, agentController.reportSecurityStatus);
+router.get('/install', agentController.getInstallScript);
 
 export default router;

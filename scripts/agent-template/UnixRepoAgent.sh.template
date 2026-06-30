@@ -1,0 +1,86 @@
+#!/bin/bash
+# WinRepo Platform - Universal Unix Agent (Linux / macOS)
+# Daemon script for inventory, deployments, and security reporting.
+
+API_URL="<API_URL>"
+API_KEY="<API_KEY>"
+CONFIG_DIR="/etc/winrepo"
+MACHINE_ID_FILE="$CONFIG_DIR/machine_id"
+
+mkdir -p "$CONFIG_DIR"
+
+if [ ! -f "$MACHINE_ID_FILE" ]; then
+    uuidgen > "$MACHINE_ID_FILE" 2>/dev/null || cat /proc/sys/kernel/random/uuid > "$MACHINE_ID_FILE"
+fi
+MACHINE_ID=$(cat "$MACHINE_ID_FILE")
+
+get_hardware() {
+    OS_NAME=$(uname -s)
+    if [ "$OS_NAME" = "Darwin" ]; then
+        CPU_NAME=$(sysctl -n machdep.cpu.brand_string)
+        TOTAL_RAM=$(sysctl -n hw.memsize)
+        FREE_DISK=$(df -k / | tail -1 | awk '{print $4 * 1024}')
+        TOTAL_DISK=$(df -k / | tail -1 | awk '{print $2 * 1024}')
+    else
+        CPU_NAME=$(grep 'model name' /proc/cpuinfo | head -1 | cut -d ':' -f 2 | xargs)
+        TOTAL_RAM=$(grep MemTotal /proc/meminfo | awk '{print $2 * 1024}')
+        FREE_DISK=$(df -B1 / | tail -1 | awk '{print $4}')
+        TOTAL_DISK=$(df -B1 / | tail -1 | awk '{print $2}')
+    fi
+
+    cat <<EOF
+{
+  "cpuName": "$CPU_NAME",
+  "totalRamBytes": $TOTAL_RAM,
+  "freeDiskBytes": $FREE_DISK,
+  "totalDiskBytes": $TOTAL_DISK
+}
+EOF
+}
+
+get_software() {
+    # Basic software inventory depending on package manager
+    if command -v dpkg >/dev/null 2>&1; then
+        dpkg-query -W -f='{"name":"${Package}","version":"${Version}","vendor":"Debian/Ubuntu","installDate":""},' | sed 's/,$//' | sed 's/^/[/' | sed 's/$/]/'
+    elif command -v rpm >/dev/null 2>&1; then
+        rpm -qa --qf '{"name":"%{NAME}","version":"%{VERSION}","vendor":"%{VENDOR}","installDate":""},' | sed 's/,$//' | sed 's/^/[/' | sed 's/$/]/'
+    elif command -v brew >/dev/null 2>&1; then
+        brew info --json=v2 --installed | grep -o '{"name":"[^"]*","full_name".*' # Simplified stub
+        echo "[]"
+    else
+        echo "[]"
+    fi
+}
+
+submit_inventory() {
+    HOSTNAME=$(hostname)
+    IP_ADDR=$(hostname -I 2>/dev/null | awk '{print $1}')
+    [ -z "$IP_ADDR" ] && IP_ADDR=$(ifconfig | grep -Eo 'inet (addr:)?([0-9]*\.){3}[0-9]*' | grep -Eo '([0-9]*\.){3}[0-9]*' | grep -v '127.0.0.1' | head -n1)
+    
+    HARDWARE=$(get_hardware)
+    SOFTWARE=$(get_software)
+
+    PAYLOAD=$(cat <<EOF
+{
+  "hostname": "$HOSTNAME",
+  "ipAddress": "$IP_ADDR",
+  "osVersion": "$(uname -sr)",
+  "agentVersion": "1.1-unix",
+  "hardware": $HARDWARE,
+  "software": $SOFTWARE
+}
+EOF
+)
+
+    curl -s -X POST "$API_URL/inventory/checkin" \
+         -H "x-api-key: $API_KEY" \
+         -H "x-machine-id: $MACHINE_ID" \
+         -H "Content-Type: application/json" \
+         -d "$PAYLOAD" >/dev/null
+}
+
+# Main Loop
+while true; do
+    submit_inventory
+    sleep 300
+done

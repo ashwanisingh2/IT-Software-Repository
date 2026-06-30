@@ -12,5 +12,14 @@ export const endpointCheckinSchema = z.object({
       version: z.string(),
       vendor: z.string()
     })
-  ).optional()
+  ).optional(),
+  hardware: z.object({
+    cpuModel: z.string().optional(),
+    totalRamBytes: z.number().optional(),
+    freeDiskBytes: z.number().optional(),
+    totalDiskBytes: z.number().optional(),
+    biosVersion: z.string().optional(),
+    manufacturer: z.string().optional(),
+    model: z.string().optional()
+  }).optional()
 });

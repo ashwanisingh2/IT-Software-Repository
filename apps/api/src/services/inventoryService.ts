@@ -3,15 +3,21 @@ import { deploymentRepository } from '../repositories/deploymentRepository';
 import { CustomError } from '../middleware/errorHandler';
 
 export class InventoryService {
-  async checkin(machineId: string, data: { hostname: string; ipAddress: string; osName: string; osVersion: string; osArch: string; software: any[] }) {
-    const endpoint = await endpointRepository.update(machineId, {
+  async checkin(machineId: string, data: { hostname: string; ipAddress: string; osName: string; osVersion: string; osArch: string; software: any[]; hardware?: any }) {
+    const updatePayload: any = {
       hostname: data.hostname,
       ipAddress: data.ipAddress,
       osName: data.osName,
       osVersion: data.osVersion,
       osArch: data.osArch,
       status: 'active'
-    });
+    };
+    
+    if (data.hardware) {
+      Object.assign(updatePayload, data.hardware);
+    }
+
+    const endpoint = await endpointRepository.update(machineId, updatePayload);
 
     if (data.software && data.software.length > 0) {
       await endpointRepository.upsertInstalledSoftware(endpoint.id, data.software);
