@@ -31,6 +31,41 @@ export const getById = async (req: Request, res: Response, next: NextFunction) =
   }
 };
 
+export const getInstalledSoftware = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const endpoint = await inventoryService.findByMachineId(req.params.machineId);
+    if (!endpoint) throw { status: 404, message: 'Endpoint not found' };
+
+    const software = await inventoryService.getInstalledSoftware(endpoint.id);
+    res.json({ success: true, data: software });
+  } catch (e) { next(e); }
+};
+
+export const queueDeployment = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const endpoint = await inventoryService.findByMachineId(req.params.machineId);
+    if (!endpoint) throw { status: 404, message: 'Endpoint not found' };
+
+    const softwareId = req.body.softwareId;
+    if (!softwareId) throw { status: 400, message: 'softwareId is required' };
+
+    const deployment = await inventoryService.createDeployment({
+      endpointId: endpoint.id,
+      softwareId: softwareId,
+      requestedBy: (req as any).user!.id
+    });
+    
+    res.json({ success: true, data: deployment });
+  } catch (e) { next(e); }
+};
+
+export const decommission = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await inventoryService.decommission(req.params.id);
+    res.json({ success: true });
+  } catch (e) { next(e); }
+};
+
 export const getUpdateSummary = async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { machineId } = req.query;

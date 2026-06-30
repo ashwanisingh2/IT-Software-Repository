@@ -25,6 +25,22 @@ const startServer = async () => {
       logger.info(`🚀 WinRepo API Server running in ${env.NODE_ENV} mode on port ${PORT}`);
     });
 
+    // Stale endpoint detection cron (runs every hour)
+    setInterval(async () => {
+      try {
+        const res = await dbPool.query(`
+          UPDATE endpoints 
+          SET status = 'stale' 
+          WHERE last_checkin < NOW() - INTERVAL '12 hours' AND status = 'active'
+        `);
+        if (res.rowCount && res.rowCount > 0) {
+          logger.info(`Marked ${res.rowCount} endpoints as stale.`);
+        }
+      } catch (err) {
+        logger.error('Error running stale endpoint detection:', err);
+      }
+    }, 60 * 60 * 1000);
+
     const shutdown = async () => {
       logger.info('Shutting down server gracefully...');
       server.close(async () => {

@@ -28,6 +28,9 @@ CREATE TABLE software (
   file_size BIGINT NOT NULL,
   storage_url TEXT NOT NULL,
   download_count BIGINT NOT NULL DEFAULT 0,
+  silent_install_args TEXT,
+  architecture TEXT DEFAULT 'any',
+  requires_software_id UUID REFERENCES software(id),
   created_by UUID NOT NULL REFERENCES users(id),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -47,6 +50,19 @@ CREATE TABLE software_versions (
   UNIQUE(software_id, version)
 );
 
+CREATE TABLE enrollment_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  token TEXT NOT NULL UNIQUE,
+  label TEXT NOT NULL DEFAULT 'default',
+  created_by UUID NOT NULL REFERENCES users(id),
+  max_uses INTEGER,
+  use_count INTEGER NOT NULL DEFAULT 0,
+  expires_at TIMESTAMPTZ,
+  revoked BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_enrollment_tokens_token ON enrollment_tokens(token) WHERE revoked = FALSE;
+
 CREATE TABLE endpoints (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   machine_id TEXT NOT NULL UNIQUE,
@@ -55,9 +71,24 @@ CREATE TABLE endpoints (
   os_name TEXT NOT NULL,
   os_version TEXT NOT NULL,
   os_arch TEXT NOT NULL DEFAULT 'x64',
+  enrollment_token_id UUID REFERENCES enrollment_tokens(id),
+  agent_version TEXT,
+  api_key_hash TEXT,
+  status TEXT NOT NULL DEFAULT 'active', -- active | stale | decommissioned | manual
   last_checkin TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE deployment_requests (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  endpoint_id UUID NOT NULL REFERENCES endpoints(id) ON DELETE CASCADE,
+  software_id UUID NOT NULL REFERENCES software(id) ON DELETE CASCADE,
+  requested_by UUID NOT NULL REFERENCES users(id),
+  status TEXT NOT NULL DEFAULT 'pending', -- pending | completed | failed
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at TIMESTAMPTZ,
+  error_message TEXT
 );
 
 CREATE TABLE installed_software (
@@ -112,6 +143,7 @@ CREATE INDEX idx_software_created_by ON software(created_by);
 CREATE INDEX idx_software_versions_software_id ON software_versions(software_id);
 CREATE INDEX idx_software_versions_is_latest ON software_versions(software_id, is_latest);
 CREATE INDEX idx_endpoints_machine_id ON endpoints(machine_id);
+CREATE INDEX idx_endpoints_status ON endpoints(status);
 CREATE INDEX idx_installed_software_endpoint_id ON installed_software(endpoint_id);
 CREATE INDEX idx_installed_software_software_id ON installed_software(software_id);
 CREATE INDEX idx_audit_logs_user_id ON audit_logs(user_id);
@@ -120,6 +152,7 @@ CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at DESC);
 CREATE INDEX idx_docs_category ON docs(category) WHERE deleted_at IS NULL;
 CREATE INDEX idx_docs_tags ON docs USING GIN(tags);
 CREATE INDEX idx_users_email ON users(email) WHERE deleted_at IS NULL;
+CREATE INDEX idx_deployment_requests_endpoint_id ON deployment_requests(endpoint_id);
 
 -- PLpgSQL TRIGGERS
 
@@ -169,13 +202,14 @@ DECLARE result JSONB;
 BEGIN
   SELECT jsonb_build_object(
     'totalPackages', (SELECT COUNT(*) FROM software WHERE deleted_at IS NULL),
-    'totalEndpoints', (SELECT COUNT(*) FROM endpoints),
+    'totalEndpoints', (SELECT COUNT(*) FROM endpoints WHERE status = 'active'),
+    'staleEndpoints', (SELECT COUNT(*) FROM endpoints WHERE status = 'stale'),
     'totalDownloads', (SELECT COALESCE(SUM(download_count),0) FROM software WHERE deleted_at IS NULL),
     'updatesNeeded', (
       SELECT COUNT(DISTINCT e.id) FROM endpoints e
       JOIN installed_software ins ON e.id = ins.endpoint_id
       JOIN software s ON ins.software_id = s.id AND s.deleted_at IS NULL
-      WHERE ins.version != s.latest_version
+      WHERE ins.version != s.latest_version AND e.status != 'decommissioned'
     ),
     'totalDocs', (SELECT COUNT(*) FROM docs WHERE deleted_at IS NULL),
     'activeUsers', (SELECT COUNT(*) FROM users WHERE deleted_at IS NULL)

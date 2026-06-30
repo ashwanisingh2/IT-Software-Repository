@@ -4,6 +4,7 @@ import softwareRoutes from './softwareRoutes';
 import inventoryRoutes from './inventoryRoutes';
 import adminRoutes from './adminRoutes';
 import docRoutes from './docRoutes';
+import agentRoutes from './agent';
 
 const router = Router();
 
@@ -14,5 +15,6 @@ router.use('/software', softwareRoutes);
 router.use('/inventory', inventoryRoutes);
 router.use('/admin', adminRoutes);
 router.use('/docs', docRoutes);
+router.use('/agent', agentRoutes);
 
 export default router;

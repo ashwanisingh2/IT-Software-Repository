@@ -1,0 +1,33 @@
+<#
+.SYNOPSIS
+WinRepo Agent Uninstall - Auto-generated
+#>
+
+$ErrorActionPreference = "Stop"
+$API_URL = "{{API_URL}}"
+
+$CONFIG_DIR = "$env:APPDATA\WinRepo"
+$TASK_NAME = "WinRepoAgent"
+
+function Get-MachineId {
+    $uuid = (Get-CimInstance -Class Win32_ComputerSystemProduct).UUID
+    if (-not $uuid -or $uuid -match "^0{8}-") {
+        $mac = (Get-NetAdapter | Where-Object Status -eq 'Up' | Select-Object -First 1).MacAddress
+        $uuid = "MAC-$mac"
+    }
+    return $uuid
+}
+
+Write-Host "Uninstalling WinRepo Agent..."
+
+if (Get-ScheduledTask -TaskName $TASK_NAME -ErrorAction SilentlyContinue) {
+    Unregister-ScheduledTask -TaskName $TASK_NAME -Confirm:$false
+    Write-Host "Scheduled task removed."
+}
+
+if (Test-Path $CONFIG_DIR) {
+    Remove-Item $CONFIG_DIR -Recurse -Force
+    Write-Host "Configuration directory removed."
+}
+
+Write-Host "Uninstall complete."

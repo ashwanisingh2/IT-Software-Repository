@@ -1,21 +1,17 @@
 export type UserRole = 'super_admin' | 'admin' | 'deployer' | 'viewer';
-
-export type SoftwareCategory = 'browser' | 'security' | 'development' | 'utility' |
-                  'office' | 'communication' | 'media' | 'networking' |
-                  'system' | 'other';
-
+export type SoftwareCategory = 'browser' | 'security' | 'development' | 'utility' | 'office' | 'communication' | 'media' | 'networking' | 'system' | 'other';
 export type SoftwareStatus = 'active' | 'deprecated' | 'beta';
-
 export type DocCategory = 'kb' | 'sop' | 'guide' | 'network' | 'server' | 'other';
+export type EndpointStatus = 'active' | 'stale' | 'decommissioned' | 'manual';
+export type DeploymentStatus = 'pending' | 'completed' | 'failed';
 
 export interface User {
   id: string;
   email: string;
   name: string;
   role: UserRole;
-  createdAt: Date;
-  updatedAt: Date;
-  deletedAt: Date | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface Software {
@@ -30,10 +26,12 @@ export interface Software {
   fileSize: number;
   storageUrl: string;
   downloadCount: number;
+  silentInstallArgs?: string;
+  architecture: string;
+  requiresSoftwareId?: string;
   createdBy: string;
-  createdAt: Date;
-  updatedAt: Date;
-  deletedAt: Date | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface SoftwareVersion {
@@ -45,45 +43,72 @@ export interface SoftwareVersion {
   storageUrl: string;
   releaseNotes: string;
   isLatest: boolean;
-  createdAt: Date;
+  createdAt: string;
+}
+
+export interface EnrollmentToken {
+  id: string;
+  token: string;
+  label: string;
+  createdBy: string;
+  maxUses: number | null;
+  useCount: number;
+  expiresAt: string | null;
+  revoked: boolean;
+  createdAt: string;
 }
 
 export interface Endpoint {
   id: string;
   machineId: string;
   hostname: string;
-  ipAddress: string;
+  ipAddress: string | null;
   osName: string;
   osVersion: string;
   osArch: string;
-  lastCheckin: Date;
-  createdAt: Date;
-  updatedAt: Date;
+  enrollmentTokenId?: string;
+  agentVersion?: string;
+  apiKeyHash?: string;
+  status: EndpointStatus;
+  lastCheckin: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DeploymentRequest {
+  id: string;
+  endpointId: string;
+  softwareId: string;
+  requestedBy: string;
+  status: DeploymentStatus;
+  requestedAt: string;
+  completedAt?: string;
+  errorMessage?: string;
 }
 
 export interface InstalledSoftware {
   id: string;
   endpointId: string;
-  softwareId: string | null;
+  softwareId?: string;
   name: string;
   version: string;
   vendor: string;
-  installedAt: Date;
-  updatedAt: Date;
+  installedAt: string;
+  updatedAt: string;
 }
 
 export interface AuditLog {
   id: string;
-  userId: string | null;
-  userEmail: string | null;
+  userId?: string;
+  userEmail?: string;
   action: string;
   resourceType: string;
-  resourceId: string | null;
-  oldValue: Record<string, unknown> | null;
-  newValue: Record<string, unknown> | null;
-  ipAddress: string;
-  userAgent: string;
-  createdAt: Date;
+  resourceId?: string;
+  oldValue?: any;
+  newValue?: any;
+  ipAddress?: string;
+  userAgent?: string;
+  createdAt: string;
 }
 
 export interface Doc {
@@ -93,39 +118,6 @@ export interface Doc {
   category: DocCategory;
   tags: string[];
   createdBy: string;
-  createdAt: Date;
-  updatedAt: Date;
-  deletedAt: Date | null;
-}
-
-export interface RolePermission {
-  role: UserRole;
-  resource: string;
-  action: string;
-}
-
-export interface ApiResponse<T> {
-  success: boolean;
-  data: T;
-  message?: string;
-}
-
-export interface PaginatedResponse<T> {
-  success: boolean;
-  data: T[];
-  pagination: {
-    total: number;
-    page: number;
-    limit: number;
-    totalPages: number;
-  };
-}
-
-export interface ApiError {
-  success: false;
-  error: {
-    code: string;
-    message: string;
-    details?: unknown;
-  };
+  createdAt: string;
+  updatedAt: string;
 }

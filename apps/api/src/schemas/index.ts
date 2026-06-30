@@ -6,7 +6,7 @@ export const endpointCheckinSchema = z.object({
   osName: z.string(),
   osVersion: z.string(),
   osArch: z.string(),
-  installedSoftware: z.array(
+  software: z.array(
     z.object({
       name: z.string(),
       version: z.string(),

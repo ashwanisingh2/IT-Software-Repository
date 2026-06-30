@@ -1,89 +1,169 @@
-import { Monitor, AlertTriangle, CheckCircle } from 'lucide-react';
+"use client";
 
-const MOCK_INVENTORY = [
-  { machine_id: 'DESKTOP-1A2B3C', hostname: 'DEV-WKSTN-01', os: 'Windows 11 Pro 23H2', last_checkin: '10 mins ago', status: 'healthy', updates_needed: 0 },
-  { machine_id: 'LAPTOP-X9Y8Z7', hostname: 'SALES-LT-42', os: 'Windows 10 Pro 22H2', last_checkin: '2 hours ago', status: 'warning', updates_needed: 3 },
-  { machine_id: 'SERVER-DB-01', hostname: 'PROD-DB-01', os: 'Windows Server 2022', last_checkin: '1 min ago', status: 'healthy', updates_needed: 0 },
-  { machine_id: 'DESKTOP-M4N5P6', hostname: 'HR-WKSTN-05', os: 'Windows 10 Pro 21H2', last_checkin: '5 days ago', status: 'offline', updates_needed: 5 },
-];
+import { useState, useEffect } from "react";
+import { api } from "../../lib/api";
+import { Button } from "../../components/ui/button";
+import { Card } from "../../components/ui/card";
+import { AgentDownloadModal } from "../../components/inventory/AgentDownloadModal";
+import { Monitor, Server, Trash, Plus, CheckCircle, AlertTriangle, XCircle } from "lucide-react";
+import Link from "next/link";
 
-export default function Inventory() {
+export default function InventoryPage() {
+  const [endpoints, setEndpoints] = useState<any[]>([]);
+  const [tokens, setTokens] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [tab, setTab] = useState<'agents' | 'manual' | 'tokens'>('agents');
+
+  const fetchData = async () => {
+    try {
+      const [epRes, tkRes] = await Promise.all([
+        api.get('/inventory/endpoints?limit=100'),
+        api.get('/agent/enrollment-tokens')
+      ]);
+      setEndpoints(epRes.data.data);
+      setTokens(tkRes.data.data);
+    } catch (err) {
+      console.error("Failed to load data", err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, [isModalOpen]);
+
+  const decommissionEndpoint = async (id: string) => {
+    if (!confirm("Are you sure you want to decommission this endpoint? It will no longer be tracked.")) return;
+    try {
+      await api.delete(`/inventory/endpoints/${id}`);
+      fetchData();
+    } catch (err) {
+      console.error(err);
+      alert("Failed to decommission");
+    }
+  };
+
+  const revokeToken = async (id: string) => {
+    if (!confirm("Revoke this token? Existing agents won't be affected, but new ones cannot enroll with it.")) return;
+    try {
+      await api.delete(`/agent/enrollment-tokens/${id}`);
+      fetchData();
+    } catch (err) {
+      console.error(err);
+      alert("Failed to revoke");
+    }
+  };
+
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-3xl font-bold tracking-tight">Endpoint Inventory</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+          <Server className="h-8 w-8 text-primary" />
+          Endpoints & Inventory
+        </h1>
+        <Button onClick={() => setIsModalOpen(true)} className="gap-2">
+          <Plus size={16} /> Add Endpoint / Agent
+        </Button>
       </div>
 
-      <div className="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-            <thead className="bg-gray-50 dark:bg-gray-900/50">
+      <AgentDownloadModal open={isModalOpen} onOpenChange={setIsModalOpen} />
+
+      <div className="flex border-b border-border">
+        <button className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${tab === 'agents' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`} onClick={() => setTab('agents')}>
+          Managed Endpoints
+        </button>
+        <button className={`px-4 py-2 font-medium text-sm border-b-2 transition-colors ${tab === 'tokens' ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground'}`} onClick={() => setTab('tokens')}>
+          Enrollment Tokens
+        </button>
+      </div>
+
+      {tab === 'agents' && (
+        <Card className="overflow-hidden">
+          <table className="min-w-full divide-y divide-border">
+            <thead className="bg-muted/50">
               <tr>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Hostname / ID
-                </th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  OS Version
-                </th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Status
-                </th>
-                <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Last Check-in
-                </th>
-                <th scope="col" className="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                  Actions
-                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Hostname / Machine ID</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">OS Info</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Status</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Last Check-in</th>
+                <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase">Actions</th>
               </tr>
             </thead>
-            <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
-              {MOCK_INVENTORY.map((endpoint) => (
-                <tr key={endpoint.machine_id} className="hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+            <tbody className="divide-y divide-border bg-card">
+              {endpoints.map((ep) => (
+                <tr key={ep.id} className="hover:bg-muted/20">
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center">
-                      <div className="flex-shrink-0">
-                        <Monitor className="h-5 w-5 text-gray-400" />
-                      </div>
-                      <div className="ml-4">
-                        <div className="text-sm font-medium text-gray-900 dark:text-white">{endpoint.hostname}</div>
-                        <div className="text-sm text-gray-500 dark:text-gray-400 font-mono text-xs">{endpoint.machine_id}</div>
+                      <Monitor className="h-5 w-5 text-muted-foreground mr-3" />
+                      <div>
+                        <div className="font-medium">{ep.hostname}</div>
+                        <div className="text-xs text-muted-foreground font-mono">{ep.machineId}</div>
                       </div>
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-900 dark:text-white">{endpoint.os}</div>
+                    <div className="text-sm">{ep.osName}</div>
+                    <div className="text-xs text-muted-foreground">{ep.osVersion} • {ep.osArch}</div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
-                    {endpoint.status === 'healthy' && (
-                       <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
-                         <CheckCircle className="w-3 h-3 mr-1" /> Up to date
-                       </span>
-                    )}
-                    {endpoint.status === 'warning' && (
-                       <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">
-                         <AlertTriangle className="w-3 h-3 mr-1" /> {endpoint.updates_needed} Updates
-                       </span>
-                    )}
-                    {endpoint.status === 'offline' && (
-                       <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-300">
-                         Offline
-                       </span>
-                    )}
+                    {ep.status === 'active' && <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400"><CheckCircle size={12}/> Active</span>}
+                    {ep.status === 'stale' && <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400"><AlertTriangle size={12}/> Stale</span>}
+                    {ep.status === 'decommissioned' && <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-400"><XCircle size={12}/> Decommissioned</span>}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                    {endpoint.last_checkin}
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-muted-foreground">
+                    {new Date(ep.lastCheckin).toLocaleString()}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                    <a href={`/inventory/${endpoint.machine_id}`} className="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300">
-                      View Details
-                    </a>
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium space-x-3">
+                    <Link href={`/inventory/${ep.machineId}`} className="text-primary hover:underline">View</Link>
+                    {ep.status !== 'decommissioned' && (
+                      <button onClick={() => decommissionEndpoint(ep.id)} className="text-destructive hover:underline">Decommission</button>
+                    )}
                   </td>
                 </tr>
               ))}
+              {endpoints.length === 0 && (
+                <tr><td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">No endpoints found.</td></tr>
+              )}
             </tbody>
           </table>
-        </div>
-      </div>
+        </Card>
+      )}
+
+      {tab === 'tokens' && (
+        <Card className="overflow-hidden">
+          <table className="min-w-full divide-y divide-border">
+            <thead className="bg-muted/50">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Token Label</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Token Snippet</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Uses</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-muted-foreground uppercase">Expires</th>
+                <th className="px-6 py-3 text-right text-xs font-medium text-muted-foreground uppercase">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border bg-card">
+              {tokens.map((tk) => (
+                <tr key={tk.id} className="hover:bg-muted/20">
+                  <td className="px-6 py-4 whitespace-nowrap font-medium">{tk.label}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-muted-foreground">{tk.token.substring(0, 8)}...</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm">{tk.useCount} / {tk.maxUses || '∞'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm">
+                    {tk.expiresAt ? new Date(tk.expiresAt).toLocaleDateString() : 'Never'}
+                  </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                    <button onClick={() => revokeToken(tk.id)} className="text-destructive hover:underline flex items-center justify-end gap-1 w-full"><Trash size={14}/> Revoke</button>
+                  </td>
+                </tr>
+              ))}
+              {tokens.length === 0 && (
+                <tr><td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">No active tokens.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </Card>
+      )}
     </div>
   );
 }

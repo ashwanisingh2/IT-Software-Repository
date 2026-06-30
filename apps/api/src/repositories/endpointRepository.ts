@@ -2,39 +2,85 @@ import { query, getClient } from '../config/database';
 import { Endpoint, InstalledSoftware, PaginatedResponse } from '@winrepo/shared';
 
 export class EndpointRepository {
-  async findByMachineId(machineId: string): Promise<Endpoint | null> {
-    const res = await query('SELECT *, machine_id as "machineId", ip_address as "ipAddress", os_name as "osName", os_version as "osVersion", os_arch as "osArch", last_checkin as "lastCheckin", created_at as "createdAt", updated_at as "updatedAt" FROM endpoints WHERE machine_id = $1', [machineId]);
-    return res.rows[0] || null;
+  private formatRow(row: any): Endpoint {
+    return {
+      id: row.id,
+      machineId: row.machine_id,
+      hostname: row.hostname,
+      ipAddress: row.ip_address,
+      osName: row.os_name,
+      osVersion: row.os_version,
+      osArch: row.os_arch,
+      enrollmentTokenId: row.enrollment_token_id,
+      agentVersion: row.agent_version,
+      apiKeyHash: row.api_key_hash,
+      status: row.status,
+      lastCheckin: row.last_checkin,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
   }
 
-  async upsert(data: { machineId: string; hostname: string; ipAddress: string; osName: string; osVersion: string; osArch: string }): Promise<Endpoint> {
+  async findByMachineId(machineId: string): Promise<Endpoint | null> {
+    const res = await query('SELECT * FROM endpoints WHERE machine_id = $1', [machineId]);
+    return res.rows[0] ? this.formatRow(res.rows[0]) : null;
+  }
+
+  async create(data: { machineId: string, hostname: string, ipAddress: string, osName: string, osVersion: string, osArch: string, status: string, enrollmentTokenId?: string, apiKeyHash?: string }): Promise<Endpoint> {
     const res = await query(
-      `INSERT INTO endpoints (machine_id, hostname, ip_address, os_name, os_version, os_arch, last_checkin)
-       VALUES ($1, $2, $3, $4, $5, $6, NOW())
-       ON CONFLICT (machine_id) DO UPDATE SET
-       hostname = EXCLUDED.hostname, ip_address = EXCLUDED.ip_address, os_name = EXCLUDED.os_name, 
-       os_version = EXCLUDED.os_version, os_arch = EXCLUDED.os_arch, last_checkin = NOW()
-       RETURNING *, machine_id as "machineId", ip_address as "ipAddress", os_name as "osName", os_version as "osVersion", os_arch as "osArch", last_checkin as "lastCheckin", created_at as "createdAt", updated_at as "updatedAt"`,
-      [data.machineId, data.hostname, data.ipAddress, data.osName, data.osVersion, data.osArch]
+      `INSERT INTO endpoints (machine_id, hostname, ip_address, os_name, os_version, os_arch, status, enrollment_token_id, api_key_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+      [data.machineId, data.hostname, data.ipAddress, data.osName, data.osVersion, data.osArch, data.status, data.enrollmentTokenId, data.apiKeyHash]
     );
-    return res.rows[0];
+    return this.formatRow(res.rows[0]);
+  }
+
+  async update(machineId: string, data: Partial<{ hostname: string, ipAddress: string, osName: string, osVersion: string, osArch: string, status: string, agentVersion: string, apiKeyHash: string }>): Promise<Endpoint> {
+    const updates: string[] = [];
+    const values: any[] = [];
+    let idx = 1;
+
+    for (const [key, val] of Object.entries(data)) {
+      if (val !== undefined) {
+        // Map JS camelCase keys to snake_case DB columns
+        const dbKey = key.replace(/[A-Z]/g, letter => `_${letter.toLowerCase()}`);
+        updates.push(`${dbKey} = $${idx}`);
+        values.push(val);
+        idx++;
+      }
+    }
+    
+    updates.push(`last_checkin = NOW()`);
+
+    values.push(machineId);
+    
+    const res = await query(
+      `UPDATE endpoints SET ${updates.join(', ')} WHERE machine_id = $${idx} RETURNING *`,
+      values
+    );
+    
+    return this.formatRow(res.rows[0]);
   }
 
   async list(page: number, limit: number): Promise<PaginatedResponse<Endpoint>> {
     const offset = (page - 1) * limit;
-    const countRes = await query('SELECT COUNT(*) FROM endpoints');
+    const countRes = await query("SELECT COUNT(*) FROM endpoints WHERE status != 'decommissioned'");
     const total = parseInt(countRes.rows[0].count, 10);
 
     const res = await query(
-      'SELECT *, machine_id as "machineId", ip_address as "ipAddress", os_name as "osName", os_version as "osVersion", os_arch as "osArch", last_checkin as "lastCheckin", created_at as "createdAt", updated_at as "updatedAt" FROM endpoints ORDER BY last_checkin DESC LIMIT $1 OFFSET $2',
+      "SELECT * FROM endpoints WHERE status != 'decommissioned' ORDER BY last_checkin DESC LIMIT $1 OFFSET $2",
       [limit, offset]
     );
 
     return {
       success: true,
-      data: res.rows,
+      data: res.rows.map(this.formatRow),
       pagination: { total, page, limit, totalPages: Math.ceil(total / limit) }
     };
+  }
+
+  async decommission(id: string): Promise<void> {
+    await query("UPDATE endpoints SET status = 'decommissioned' WHERE id = $1", [id]);
   }
 
   async getInstalledSoftware(endpointId: string): Promise<InstalledSoftware[]> {
@@ -55,7 +101,6 @@ export class EndpointRepository {
           [endpointId, item.name, item.version, item.vendor]
         );
       }
-      // Note: we can optionally delete installed_software that was not in the payload
       await client.query('COMMIT');
     } catch (e) {
       await client.query('ROLLBACK');
