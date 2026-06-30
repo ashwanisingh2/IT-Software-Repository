@@ -1,5 +1,5 @@
 $ErrorActionPreference = "Stop"
-$ApiUrl = "http://localhost:4000/api"
+$ApiUrl = "http://localhost/api"
 
 Write-Host "========================================="
 Write-Host "WinRepo E2E Feature Test Script"
@@ -40,7 +40,7 @@ if ($stats.success) {
 
 # 4. Software Catalog
 Write-Host "`n[4/4] Testing Software Catalog Retrieval..."
-$software = Invoke-RestMethod -Uri "$ApiUrl/software" -Method Get
+$software = Invoke-RestMethod -Uri "$ApiUrl/software" -Method Get -Headers $headers
 if ($software.success) {
     Write-Host "Software Catalog Retrieved successfully! ($($software.data.Length) items)" -ForegroundColor Green
 }
