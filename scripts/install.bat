@@ -4,15 +4,15 @@ echo =========================================
 echo WinRepo Platform - Agent Installer
 echo =========================================
 
-set SERVER_URL=http://localhost:4000/api
+set SERVER_URL=http://localhost/api
 set PS_SCRIPT="%PUBLIC%\WinRepoClient.ps1"
 set SCHEDULE_NAME="WinRepoAgent"
 
-echo Downloading WinRepo Client script...
-powershell -Command "(New-Object Net.WebClient).DownloadFile('%SERVER_URL%/docs/WinRepoClient.ps1', '%PS_SCRIPT%')"
+echo Copying WinRepo Client script to Public directory...
+copy "%~dp0WinRepoClient.ps1" %PS_SCRIPT% >nul
 
 if not exist %PS_SCRIPT% (
-    echo Failed to download the script. Please ensure the server is reachable.
+    echo Failed to copy the script. Please ensure you are running this from the scripts folder.
     exit /b 1
 )
 

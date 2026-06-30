@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, Package, MonitorSmartphone, Shield, FileText } from "lucide-react";
 import { cn } from "../../lib/utils";
@@ -24,7 +25,7 @@ export function Sidebar() {
           </h2>
           <div className="space-y-1">
             {navItems.map((item) => (
-              <a
+              <Link
                 key={item.href}
                 href={item.href}
                 className={cn(
@@ -34,7 +35,7 @@ export function Sidebar() {
               >
                 <item.icon className="h-4 w-4" />
                 {item.title}
-              </a>
+              </Link>
             ))}
           </div>
         </div>
