@@ -6,7 +6,7 @@ export const list = async (req: Request, res: Response, next: NextFunction) => {
     const { page, limit } = req.query;
     const result = await inventoryService.getEndpoints(Number(page) || 1, Number(limit) || 20);
     res.json(result);
-  } catch (error) {
+  } catch (error: any) {
     next(error);
   }
 };
@@ -16,7 +16,7 @@ export const checkin = async (req: Request, res: Response, next: NextFunction) =
     const { machineId } = req.params;
     const result = await inventoryService.checkin(machineId, req.body);
     res.json({ success: true, data: result });
-  } catch (error) {
+  } catch (error: any) {
     next(error);
   }
 };
@@ -26,7 +26,7 @@ export const getById = async (req: Request, res: Response, next: NextFunction) =
     const { machineId } = req.params;
     const result = await inventoryService.getById(machineId);
     res.json({ success: true, data: result });
-  } catch (error) {
+  } catch (error: any) {
     next(error);
   }
 };
@@ -38,7 +38,7 @@ export const getInstalledSoftware = async (req: Request, res: Response, next: Ne
 
     const software = await inventoryService.getInstalledSoftware(endpoint.id);
     res.json({ success: true, data: software });
-  } catch (e) { next(e); }
+  } catch (e: any) { next(e); }
 };
 
 export const queueDeployment = async (req: Request, res: Response, next: NextFunction) => {
@@ -56,14 +56,14 @@ export const queueDeployment = async (req: Request, res: Response, next: NextFun
     });
     
     res.json({ success: true, data: deployment });
-  } catch (e) { next(e); }
+  } catch (e: any) { next(e); }
 };
 
 export const decommission = async (req: Request, res: Response, next: NextFunction) => {
   try {
     await inventoryService.decommission(req.params.id);
     res.json({ success: true });
-  } catch (e) { next(e); }
+  } catch (e: any) { next(e); }
 };
 
 export const getUpdateSummary = async (req: Request, res: Response, next: NextFunction) => {
@@ -74,7 +74,7 @@ export const getUpdateSummary = async (req: Request, res: Response, next: NextFu
     }
     const result = await inventoryService.getUpdateSummary(machineId);
     res.json({ success: true, data: result });
-  } catch (error) {
+  } catch (error: any) {
     next(error);
   }
 };

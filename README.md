@@ -21,3 +21,6 @@ Use the provided `Makefile` for operations:
 
 ## Client Installation
 Run `scripts/install.bat` as Administrator on target Windows endpoints to install the WinRepo Agent.
+
+## Agent Deployment
+To deploy the WinRepo agent to your endpoints, simply navigate to the Endpoints page in the dashboard, generate a new enrollment token, and run the provided PowerShell one-liner on your target machines. See [docs/AGENT_DEPLOYMENT.md](docs/AGENT_DEPLOYMENT.md) for more details.

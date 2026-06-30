@@ -25,21 +25,21 @@ export const agentController = {
       );
       
       res.status(201).json({ success: true, data: result });
-    } catch (e) { next(e); }
+    } catch (e: any) { next(e); }
   },
 
   async listTokens(req: Request, res: Response, next: NextFunction) {
     try {
       const tokens = await enrollmentTokenRepository.listActive();
       res.json({ success: true, data: tokens });
-    } catch (e) { next(e); }
+    } catch (e: any) { next(e); }
   },
 
   async revokeToken(req: Request, res: Response, next: NextFunction) {
     try {
       await enrollmentTokenRepository.revoke(req.params.id);
       res.json({ success: true, message: 'Token revoked successfully' });
-    } catch (e) { next(e); }
+    } catch (e: any) { next(e); }
   },
 
   // --- Public Agent Routes ---
@@ -53,7 +53,7 @@ export const agentController = {
       res.setHeader('Content-Type', 'text/plain');
       res.setHeader('Content-Disposition', 'attachment; filename="WinRepoAgent.ps1"');
       res.send(script);
-    } catch (e) {
+    } catch (e: any) {
       if (e instanceof CustomError) {
         res.status(e.statusCode).send(`Write-Error "${e.message}"`);
       } else {
@@ -77,7 +77,7 @@ export const agentController = {
 
       const result = await agentService.registerMachine(data);
       res.json({ success: true, data: result });
-    } catch (e) { next(e); }
+    } catch (e: any) { next(e); }
   },
 
   // --- Machine Authenticated Routes ---
@@ -89,7 +89,7 @@ export const agentController = {
 
       const deployments = await deploymentRepository.findPendingByEndpoint(endpoint.id);
       res.json({ success: true, data: deployments });
-    } catch (e) { next(e); }
+    } catch (e: any) { next(e); }
   },
 
   async submitDeploymentResult(req: Request, res: Response, next: NextFunction) {
@@ -103,7 +103,7 @@ export const agentController = {
       
       await deploymentRepository.updateResult(data.deploymentId, data.status, data.errorMessage);
       res.json({ success: true });
-    } catch (e) { next(e); }
+    } catch (e: any) { next(e); }
   },
 
   async reportError(req: Request, res: Response, next: NextFunction) {
@@ -111,7 +111,7 @@ export const agentController = {
       // In a real app we would log this to audit_logs or a dedicated errors table
       console.error(`Agent Error [${(req as any).machineId}]:`, req.body);
       res.json({ success: true });
-    } catch (e) { next(e); }
+    } catch (e: any) { next(e); }
   },
   
   async getUninstallScript(req: Request, res: Response, next: NextFunction) {
@@ -120,6 +120,6 @@ export const agentController = {
       res.setHeader('Content-Type', 'text/plain');
       res.setHeader('Content-Disposition', 'attachment; filename="WinRepoAgentUninstall.ps1"');
       res.send(script);
-    } catch (e) { next(e); }
+    } catch (e: any) { next(e); }
   }
 };

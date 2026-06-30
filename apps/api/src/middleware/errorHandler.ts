@@ -1,6 +1,17 @@
 import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { logger } from '../config/logger';
+export class CustomError extends Error {
+  public statusCode: number;
+  public code?: string;
+
+  constructor(message: string, statusCode: number = 500, code?: string) {
+    super(message);
+    this.statusCode = statusCode;
+    this.code = code;
+    Object.setPrototypeOf(this, CustomError.prototype);
+  }
+}
 
 export const errorHandler = (err: any, req: Request, res: Response, next: NextFunction) => {
   if (err instanceof ZodError) {
